@@ -243,7 +243,7 @@
         </div>
     </div>
 
-    <!-- Script JavaScript com Servidor/Banco de Dados -->
+    <!-- Script JavaScript -->
     <script>
         let state = {
             currentUser: JSON.parse(sessionStorage.getItem('estoque_current_user')) || null,
@@ -299,7 +299,7 @@
         const importDataBtn = document.getElementById('import-data');
         const importFileInput = document.getElementById('import-file');
 
-        // Função para buscar dados do Servidor / Banco de Dados
+        // Função para buscar dados do Servidor (Segura: valida usuário)
         async function loadDataFromServer() {
             try {
                 const response = await fetch('/api/data');
@@ -315,7 +315,7 @@
             }
         }
 
-        // Função para enviar alterações para o Servidor / Banco de Dados
+        // Função para enviar alterações para o Servidor (Agora envia o currentUser para validação de segurança)
         async function saveState() {
             try {
                 await fetch('/api/sync', {
@@ -324,9 +324,9 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        user: state.currentUser,
                         products: state.products,
-                        movements: state.movements,
-                        users: state.users
+                        movements: state.movements
                     })
                 });
             } catch (error) {
@@ -340,7 +340,7 @@
             });
             setupEventListeners();
             
-            // Atualiza os dados a cada 5 segundos para sincronia em tempo real entre computadores
+            // Atualiza os dados a cada 5 segundos para sincronia em tempo real
             setInterval(loadDataFromServer, 5000);
         });
 
@@ -360,7 +360,7 @@
                 authModal.classList.remove('hidden');
                 authModal.classList.add('flex');
             } else {
-                currentUserSpan.textContent = `${state.currentUser.name} (ID: ${state.currentUser.userId})`;
+                currentUserSpan.textContent = `${state.currentUser.name} (ID: ${state.currentUser.user_id})`;
                 authModal.classList.add('hidden');
                 authModal.classList.remove('flex');
             }
@@ -399,32 +399,52 @@
                     return;
                 }
 
-                if (authMode === 'register') {
-                    const name = authNameInput.value.trim();
-                    const existingUser = state.users.find(u => u.userId === userId);
-                    if (existingUser) {
-                        alert('Este ID já está cadastrado no sistema. Escolha outro ID único ou faça login.');
-                        return;
-                    }
-                    const newUser = { id: 'usr_' + Date.now(), name, userId, password };
-                    state.users.push(newUser);
+                try {
+                    if (authMode === 'register') {
+                        const name = authNameInput.value.trim();
+                        if (!name) {
+                            alert('Informe seu nome completo.');
+                            return;
+                        }
 
-                    state.currentUser = newUser;
-                    sessionStorage.setItem('estoque_current_user', JSON.stringify(newUser));
-                    await saveState();
-                    alert('Conta cadastrada e acessada com sucesso!');
-                } else {
-                    const user = state.users.find(u => u.userId === userId && u.password === password);
-                    if (!user) {
-                        alert('ID de 8 dígitos ou senha incorretos, ou conta não cadastrada.');
-                        return;
+                        const response = await fetch('/api/auth', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'register', userId, password, name })
+                        });
+                        const data = await response.json();
+
+                        if (!response.ok) {
+                            alert(data.error || 'Erro ao cadastrar conta.');
+                            return;
+                        }
+
+                        state.currentUser = data.user;
+                        sessionStorage.setItem('estoque_current_user', JSON.stringify(data.user));
+                        alert('Conta cadastrada e acessada com sucesso!');
+                    } else {
+                        const response = await fetch('/api/auth', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'login', userId, password })
+                        });
+                        const data = await response.json();
+
+                        if (!response.ok) {
+                            alert(data.error || 'ID ou senha incorretos.');
+                            return;
+                        }
+
+                        state.currentUser = data.user;
+                        sessionStorage.setItem('estoque_current_user', JSON.stringify(data.user));
                     }
-                    state.currentUser = user;
-                    sessionStorage.setItem('estoque_current_user', JSON.stringify(user));
+
+                    checkUserSession();
+                    loadDataFromServer();
+                } catch (err) {
+                    console.error("Erro na autenticação:", err);
+                    alert("Erro de conexão com o servidor.");
                 }
-
-                checkUserSession();
-                renderAll();
             });
 
             logoutBtn.addEventListener('click', () => {
@@ -466,7 +486,7 @@
                         const oldQty = state.products[index].quantity;
                         state.products[index] = {
                             ...state.products[index],
-                            name, sku, category, price, quantity, minStock,
+                            name, sku, category, price, quantity, min_stock: minStock,
                             updated_at: new Date().toISOString()
                         };
                         if (oldQty !== quantity) {
@@ -548,22 +568,13 @@
                 reader.onload = async function(event) {
                     try {
                         const imported = JSON.parse(event.target.result);
-                        if (imported.products && imported.movements) {
-                            if (confirm('Deseja substituir os dados atuais pelos dados importados?')) {
-                                state.products = imported.products;
-                                state.movements = imported.movements;
-                                if (imported.users) {
-                                    state.users = imported.users;
-                                }
-                                await saveState();
-                                renderAll();
-                                alert('Dados importados com sucesso!');
-                            }
-                        } else {
-                            alert('Arquivo inválido.');
-                        }
+                        if (imported.products) state.products = imported.products;
+                        if (imported.movements) state.movements = imported.movements;
+                        await saveState();
+                        renderAll();
+                        alert('Dados importados com sucesso!');
                     } catch (err) {
-                        alert('Erro ao processar arquivo.');
+                        alert('Erro ao processar arquivo JSON.');
                     }
                 };
                 reader.readAsText(file);
@@ -571,44 +582,43 @@
         }
 
         function addMovementRecord(productId, productName, type, quantity, reason) {
-            const userName = state.currentUser ? state.currentUser.name : 'Anônimo';
-            const movement = {
-                id: 'mov_' + Date.now() + Math.random().toString(36).substring(2, 7),
+            const newMovement = {
+                id: 'mov_' + Date.now() + '_' + Math.random().toString(36.substring(2, 5)),
                 product_id: productId,
                 product_name: productName,
                 type: type,
                 quantity: quantity,
                 reason: reason,
-                user_name: userName,
+                user_name: state.currentUser ? state.currentUser.name : 'Anônimo',
                 date: new Date().toISOString()
             };
-            state.movements.unshift(movement);
+            state.movements.unshift(newMovement);
         }
 
         function renderAll() {
             renderStats();
-            renderCategoriesDropdown();
+            renderCategoryFilterOptions();
             renderProductsTable();
             renderMovementsTable();
         }
 
         function renderStats() {
-            const totalItems = state.products.reduce((acc, p) => acc + (parseInt(p.quantity) || 0), 0);
-            const totalValue = state.products.reduce((acc, p) => acc + ((parseFloat(p.price) || 0) * (parseInt(p.quantity) || 0)), 0);
-            const lowStockCount = state.products.filter(p => (parseInt(p.quantity) || 0) <= (parseInt(p.min_stock) || 5)).length;
-            
+            const totalItems = state.products.reduce((acc, p) => acc + (p.quantity || 0), 0);
+            const totalValue = state.products.reduce((acc, p) => acc + ((p.quantity || 0) * (p.price || 0)), 0);
+            const lowStockCount = state.products.filter(p => (p.quantity || 0) <= (p.min_stock || 5)).length;
+
             const todayStr = new Date().toISOString().slice(0, 10);
             const todayMovements = state.movements.filter(m => m.date && m.date.slice(0, 10) === todayStr).length;
 
-            totalItemsEl.textContent = totalItems;
+            totalItemsEl.textContent = totalItems.toLocaleString('pt-BR');
             totalValueEl.textContent = totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
             lowStockCountEl.textContent = lowStockCount;
             todayMovementsEl.textContent = todayMovements;
         }
 
-        function renderCategoriesDropdown() {
+        function renderCategoryFilterOptions() {
+            const categories = [...new Set(state.products.map(p => p.category).filter(Boolean))];
             const currentSelected = categoryFilter.value;
-            const categories = [...new Set(state.products.map(p => p.category).filter(Boolean))].sort();
             
             categoryFilter.innerHTML = '<option value="">Todas as Categorias</option>';
             categories.forEach(cat => {
@@ -622,47 +632,50 @@
 
         function renderProductsTable() {
             const search = searchInput.value.toLowerCase();
-            const category = categoryFilter.value;
+            const selectedCategory = categoryFilter.value;
 
             const filtered = state.products.filter(p => {
-                const matchesSearch = (p.name && p.name.toLowerCase().includes(search)) || (p.sku && p.sku.toLowerCase().includes(search));
-                const matchesCategory = !category || p.category === category;
-                return matchesSearch && matchesCategory;
+                const matchSearch = (p.name && p.name.toLowerCase().includes(search)) || (p.sku && p.sku.toLowerCase().includes(search));
+                const matchCat = !selectedCategory || p.category === selectedCategory;
+                return matchSearch && matchCat;
             });
 
             if (filtered.length === 0) {
-                productsTableBody.innerHTML = `<tr><td colspan="7" class="px-6 py-8 text-center text-sm text-gray-500">Nenhum produto encontrado.</td></tr>`;
+                productsTableBody.innerHTML = `<tr><td colspan="7" class="px-6 py-8 text-center text-gray-500 text-sm">Nenhum produto encontrado.</td></tr>`;
                 return;
             }
 
             productsTableBody.innerHTML = filtered.map(p => {
-                const qty = parseInt(p.quantity) || 0;
-                const min = parseInt(p.min_stock) || 5;
-                const price = parseFloat(p.price) || 0;
-                const total = qty * price;
-                const isLowStock = qty <= min;
+                const isLowStock = (p.quantity || 0) <= (p.min_stock || 5);
+                const totalVal = (p.quantity || 0) * (p.price || 0);
 
                 return `
                     <tr class="hover:bg-gray-50 transition-colors">
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-medium text-gray-900">${escapeHtml(p.name)}</div>
-                            <div class="text-xs text-gray-500">SKU: ${escapeHtml(p.sku || '-')}</div>
+                            <div class="text-sm font-semibold text-gray-900">${escapeHtml(p.name)}</div>
+                            <div class="text-xs text-gray-500 font-mono">SKU: ${escapeHtml(p.sku || 'N/A')}</div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${escapeHtml(p.category || '-')}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">${price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${isLowStock ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
-                                ${qty} ${isLowStock ? '<i class="fa-solid fa-triangle-exclamation ml-1 text-red-600" title="Estoque Baixo"></i>' : ''}
+                            <span class="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">${escapeHtml(p.category || 'Geral')}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
+                            R$ ${(p.price || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="px-3 py-1 inline-flex text-xs leading-5 font-bold rounded-full ${isLowStock ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
+                                ${p.quantity || 0} un. ${isLowStock ? '<i class="fa-solid fa-triangle-exclamation ml-1.5 mt-0.5" title="Estoque Baixo"></i>' : ''}
                             </span>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
-                            <button onclick="openMovementModal('${p.id}', 'ENTRADA')" class="bg-green-50 hover:bg-green-100 text-green-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Entrada"><i class="fa-solid fa-plus mr-1"></i>Entrada</button>
-                            <button onclick="openMovementModal('${p.id}', 'SAIDA')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Baixa"><i class="fa-solid fa-minus mr-1"></i>Baixa</button>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold font-mono">
+                            R$ ${totalVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm space-x-1">
+                            <button onclick="openMovementModal('${p.id}', 'ENTRADA')" class="bg-green-50 hover:bg-green-100 text-green-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Entrada"><i class="fa-solid fa-plus"></i> Entr.</button>
+                            <button onclick="openMovementModal('${p.id}', 'SAIDA')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Baixa"><i class="fa-solid fa-minus"></i> Baixa</button>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                            <button onclick="editProduct('${p.id}')" class="text-blue-600 hover:text-blue-900" title="Editar"><i class="fa-solid fa-pen-to-square"></i></button>
-                            <button onclick="deleteProduct('${p.id}')" class="text-red-600 hover:text-red-900" title="Excluir"><i class="fa-solid fa-trash"></i></button>
+                            <button onclick="editProduct('${p.id}')" class="text-blue-600 hover:text-blue-900" title="Editar Produto"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button onclick="deleteProduct('${p.id}')" class="text-red-600 hover:text-red-900" title="Excluir Produto"><i class="fa-solid fa-trash"></i></button>
                         </td>
                     </tr>
                 `;
@@ -671,69 +684,60 @@
 
         function renderMovementsTable() {
             if (state.movements.length === 0) {
-                movementsTableBody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-gray-500">Nenhuma movimentação registrada.</td></tr>`;
+                movementsTableBody.innerHTML = `<tr><td colspan="5" class="px-6 py-6 text-center text-gray-500 text-sm">Nenhuma movimentação registrada.</td></tr>`;
                 return;
             }
 
-            movementsTableBody.innerHTML = state.movements.map(m => {
-                const dateObj = m.date ? new Date(m.date) : new Date();
-                const dateFormatted = isNaN(dateObj.getTime()) ? '-' : dateObj.toLocaleString('pt-BR');
+            movementsTableBody.innerHTML = state.movements.slice(0, 50).map(m => {
+                const dateFormatted = m.date ? new Date(m.date).toLocaleString('pt-BR') : '-';
                 const isEntrada = m.type === 'ENTRADA';
 
                 return `
                     <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">${dateFormatted}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHtml(m.product_name)}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500 font-mono">${dateFormatted}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">${escapeHtml(m.product_name)}</td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="px-2 py-0.5 inline-flex text-xs leading-4 font-bold rounded ${isEntrada ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
-                                ${isEntrada ? '+' : '-'} ${m.quantity} (${m.type})
+                            <span class="px-2.5 py-1 text-xs font-bold rounded-lg ${isEntrada ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                                ${isEntrada ? '+ ' : '- '} ${m.quantity} un (${m.type})
                             </span>
                         </td>
-                        <td class="px-6 py-4 text-sm text-gray-600 max-w-xs truncate" title="${escapeHtml(m.reason)}">${escapeHtml(m.reason)}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-xs font-medium text-gray-700">${escapeHtml(m.user_name || 'Anônimo')}</td>
+                        <td class="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">${escapeHtml(m.reason)}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><i class="fa-solid fa-user-circle text-gray-400 mr-1"></i> ${escapeHtml(m.user_name)}</td>
                     </tr>
                 `;
             }).join('');
         }
 
         window.openMovementModal = function(productId, type) {
-            const product = state.products.find(p => p.id === productId);
-            if (!product) return;
-
             movementProductId.value = productId;
             movementType.value = type;
-            movementTitle.textContent = type === 'ENTRADA' ? `Registrar Entrada: ${product.name}` : `Registrar Baixa: ${product.name}`;
-            movementQuantity.value = 1;
+            movementQuantity.value = '';
             movementReason.value = '';
-
+            movementTitle.textContent = type === 'ENTRADA' ? 'Registrar Entrada de Estoque' : 'Registrar Baixa de Estoque';
             movementModal.classList.remove('hidden');
             movementModal.classList.add('flex');
         }
 
         window.editProduct = function(productId) {
-            const product = state.products.find(p => p.id === productId);
-            if (!product) return;
+            const p = state.products.find(item => item.id === productId);
+            if (!p) return;
 
             modalTitle.textContent = 'Editar Produto';
-            productIdInput.value = product.id;
-            document.getElementById('product-name').value = product.name || '';
-            document.getElementById('product-sku').value = product.sku || '';
-            document.getElementById('product-category').value = product.category || '';
-            document.getElementById('product-price').value = product.price || 0;
-            document.getElementById('product-quantity').value = product.quantity || 0;
-            document.getElementById('product-min-stock').value = product.min_stock || 5;
+            productIdInput.value = p.id;
+            document.getElementById('product-name').value = p.name;
+            document.getElementById('product-sku').value = p.sku || '';
+            document.getElementById('product-category').value = p.category || '';
+            document.getElementById('product-price').value = p.price;
+            document.getElementById('product-quantity').value = p.quantity;
+            document.getElementById('product-min-stock').value = p.min_stock || 5;
 
             productModal.classList.remove('hidden');
             productModal.classList.add('flex');
         }
 
         window.deleteProduct = function(productId) {
-            const product = state.products.find(p => p.id === productId);
-            if (!product) return;
-
-            if (confirm(`Deseja realmente excluir o produto "${product.name}"?`)) {
+            if (confirm('Tem certeza que deseja excluir este produto do estoque?')) {
                 state.products = state.products.filter(p => p.id !== productId);
-                addMovementRecord(productId, product.name, 'SAIDA', product.quantity, `Produto excluído do sistema`);
                 saveState();
                 renderAll();
             }
