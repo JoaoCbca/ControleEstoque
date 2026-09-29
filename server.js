@@ -48,7 +48,7 @@ initDB();
 // Rota para buscar dados
 app.get('/api/data', async (req, res) => {
   try {
-    const users = await pool.query('SELECT id, name, user_id FROM users'); // Nunca retorna senhas na listagem geral
+    const users = await pool.query('SELECT id, name, user_id FROM users');
     const products = await pool.query('SELECT * FROM products');
     const movements = await pool.query('SELECT * FROM movements ORDER BY date DESC');
     res.json({
@@ -61,58 +61,38 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-// Rota de Autenticação Direta (Login/Registro seguro no backend)
+// Rota de Autenticação (Apenas Login para usuários pré-cadastrados no Banco)
 app.post('/api/auth', async (req, res) => {
-  const { action, userId, password, name } = req.body;
+  const { userId, password } = req.body;
   
   if (!userId || !/^\d{8}$/.test(userId)) {
     return res.status(400).json({ error: 'ID de acesso inválido. Deve conter exatamente 8 dígitos numéricos.' });
   }
 
   try {
-    if (action === 'register') {
-      // Verifica se o ID já existe
-      const check = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-      if (check.rows.length > 0) {
-        return res.status(400).json({ error: 'Este ID já está cadastrado no sistema.' });
-      }
-      
-      const newId = 'usr_' + Date.now();
-      await pool.query(
-        'INSERT INTO users (id, name, user_id, password) VALUES ($1, $2, $3, $4)',
-        [newId, name || 'Usuário', userId, password]
-      );
-      
-      return res.json({ success: true, user: { id: newId, name: name || 'Usuário', user_id: userId } });
-      
-    } else {
-      // Login
-      const result = await pool.query('SELECT * FROM users WHERE user_id = $1 AND password = $2', [userId, password]);
-      if (result.rows.length === 0) {
-        return res.status(401).json({ error: 'ID ou senha incorretos.' });
-      }
-      
-      const user = result.rows[0];
-      return res.json({ success: true, user: { id: user.id, name: user.name, user_id: user.user_id } });
+    const result = await pool.query('SELECT * FROM users WHERE user_id = $1 AND password = $2', [userId, password]);
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'ID ou senha incorretos, ou usuário não autorizado.' });
     }
+    
+    const user = result.rows[0];
+    return res.json({ success: true, user: { id: user.id, name: user.name, user_id: user.user_id } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Rota para salvar/sincronizar alterações — AGORA PROTEGIDA POR VALIDAÇÃO DE USUÁRIO
+// Rota para salvar/sincronizar alterações — Protegida por validação de usuário
 app.post('/api/sync', async (req, res) => {
   const { user, products, movements } = req.body;
 
-  // Validação de segurança: Ninguém mexe no estoque sem passar um usuário válido autenticado
   if (!user || !user.user_id) {
-    return res.status(403).json({ error: 'Acesso negado. É necessário estar autenticado para sincronizar dados.' });
+    return res.status(403).json({ error: 'Acesso negado. É necessário estar autenticado.' });
   }
 
   const client = await pool.connect();
   
   try {
-    // Valida no banco se o usuário realmente existe antes de aceitar a alteração
     const userCheck = await client.query('SELECT * FROM users WHERE user_id = $1', [user.user_id]);
     if (userCheck.rows.length === 0) {
       return res.status(403).json({ error: 'Usuário não autorizado.' });

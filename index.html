@@ -15,36 +15,26 @@
 </head>
 <body class="min-h-screen flex flex-col">
 
-    <!-- Modal de Autenticação (Login / Registro com ID de 8 dígitos) -->
+    <!-- Modal de Autenticação (Apenas Login Restrito) -->
     <div id="auth-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 transform transition-all">
             <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
-                <i class="fa-solid fa-id-card"></i>
+                <i class="fa-solid fa-lock"></i>
             </div>
             
-            <h2 id="auth-title" class="text-2xl font-bold text-gray-900 text-center mb-2">Acessar Sistema</h2>
-            <p id="auth-subtitle" class="text-gray-600 text-sm text-center mb-6">Entre com seu ID de 8 dígitos e senha para gerenciar o estoque.</p>
-
-            <!-- Abas de Alternância (Login / Registro) -->
-            <div class="flex bg-gray-100 p-1 rounded-xl mb-6">
-                <button type="button" id="tab-login-btn" onclick="switchAuthTab('login')" class="flex-1 py-2 text-sm font-semibold rounded-lg bg-white text-blue-600 shadow-sm transition-all">Entrar</button>
-                <button type="button" id="tab-register-btn" onclick="switchAuthTab('register')" class="flex-1 py-2 text-sm font-semibold rounded-lg text-gray-500 hover:text-gray-800 transition-all">Cadastrar-se</button>
-            </div>
+            <h2 class="text-2xl font-bold text-gray-900 text-center mb-2">Acesso Restrito</h2>
+            <p class="text-gray-600 text-sm text-center mb-6">Informe seu ID de 8 dígitos e senha pré-cadastrados para entrar.</p>
 
             <form id="auth-form" class="space-y-4">
-                <div id="register-name-container" class="hidden">
-                    <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Nome Completo / Apelido</label>
-                    <input type="text" id="auth-name" placeholder="Ex: Maria Souza" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm">
-                </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">ID de Acesso (8 Números)</label>
-                    <input type="text" id="auth-id-input" placeholder="Ex: 84729103" maxlength="8" pattern="\d{8}" title="Informe exatamente 8 números" required class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm font-mono tracking-widest text-center">
+                    <input type="text" id="auth-id-input" placeholder="Ex: 12345678" maxlength="8" pattern="\d{8}" title="Informe exatamente 8 números" required class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm font-mono tracking-widest text-center">
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Senha</label>
                     <input type="password" id="auth-password" placeholder="••••••••" required class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm">
                 </div>
-                <button type="submit" id="auth-submit-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg shadow transition-colors mt-2">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg shadow transition-colors mt-2">
                     Entrar no Sistema
                 </button>
             </form>
@@ -252,19 +242,10 @@
             movements: []
         };
 
-        let authMode = 'login'; // 'login' ou 'register'
-
         const authModal = document.getElementById('auth-modal');
-        const authTitle = document.getElementById('auth-title');
-        const authSubtitle = document.getElementById('auth-subtitle');
         const authForm = document.getElementById('auth-form');
-        const authNameInput = document.getElementById('auth-name');
         const authIdInput = document.getElementById('auth-id-input');
         const authPasswordInput = document.getElementById('auth-password');
-        const authSubmitBtn = document.getElementById('auth-submit-btn');
-        const registerNameContainer = document.getElementById('register-name-container');
-        const tabLoginBtn = document.getElementById('tab-login-btn');
-        const tabRegisterBtn = document.getElementById('tab-register-btn');
 
         const currentUserSpan = document.getElementById('current-user');
         const logoutBtn = document.getElementById('logout-btn');
@@ -299,7 +280,6 @@
         const importDataBtn = document.getElementById('import-data');
         const importFileInput = document.getElementById('import-file');
 
-        // Função para buscar dados do Servidor (Segura: valida usuário)
         async function loadDataFromServer() {
             try {
                 const response = await fetch('/api/data');
@@ -315,14 +295,11 @@
             }
         }
 
-        // Função para enviar alterações para o Servidor (Agora envia o currentUser para validação de segurança)
         async function saveState() {
             try {
                 await fetch('/api/sync', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         user: state.currentUser,
                         products: state.products,
@@ -340,7 +317,6 @@
             });
             setupEventListeners();
             
-            // Atualiza os dados a cada 5 segundos para sincronia em tempo real
             setInterval(loadDataFromServer, 5000);
         });
 
@@ -366,28 +342,6 @@
             }
         }
 
-        window.switchAuthTab = function(mode) {
-            authMode = mode;
-            authForm.reset();
-            if (mode === 'login') {
-                authTitle.textContent = 'Acessar Sistema';
-                authSubtitle.textContent = 'Entre com seu ID de 8 dígitos e senha para gerenciar o estoque.';
-                authSubmitBtn.textContent = 'Entrar no Sistema';
-                registerNameContainer.classList.add('hidden');
-                authNameInput.required = false;
-                tabLoginBtn.className = "flex-1 py-2 text-sm font-semibold rounded-lg bg-white text-blue-600 shadow-sm transition-all";
-                tabRegisterBtn.className = "flex-1 py-2 text-sm font-semibold rounded-lg text-gray-500 hover:text-gray-800 transition-all";
-            } else {
-                authTitle.textContent = 'Criar Nova Conta';
-                authSubtitle.textContent = 'Escolha um ID exclusivo de 8 números e defina sua senha.';
-                authSubmitBtn.textContent = 'Cadastrar Conta';
-                registerNameContainer.classList.remove('hidden');
-                authNameInput.required = true;
-                tabRegisterBtn.className = "flex-1 py-2 text-sm font-semibold rounded-lg bg-white text-blue-600 shadow-sm transition-all";
-                tabLoginBtn.className = "flex-1 py-2 text-sm font-semibold rounded-lg text-gray-500 hover:text-gray-800 transition-all";
-            }
-        }
-
         function setupEventListeners() {
             authForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -400,44 +354,20 @@
                 }
 
                 try {
-                    if (authMode === 'register') {
-                        const name = authNameInput.value.trim();
-                        if (!name) {
-                            alert('Informe seu nome completo.');
-                            return;
-                        }
+                    const response = await fetch('/api/auth', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, password })
+                    });
+                    const data = await response.json();
 
-                        const response = await fetch('/api/auth', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'register', userId, password, name })
-                        });
-                        const data = await response.json();
-
-                        if (!response.ok) {
-                            alert(data.error || 'Erro ao cadastrar conta.');
-                            return;
-                        }
-
-                        state.currentUser = data.user;
-                        sessionStorage.setItem('estoque_current_user', JSON.stringify(data.user));
-                        alert('Conta cadastrada e acessada com sucesso!');
-                    } else {
-                        const response = await fetch('/api/auth', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'login', userId, password })
-                        });
-                        const data = await response.json();
-
-                        if (!response.ok) {
-                            alert(data.error || 'ID ou senha incorretos.');
-                            return;
-                        }
-
-                        state.currentUser = data.user;
-                        sessionStorage.setItem('estoque_current_user', JSON.stringify(data.user));
+                    if (!response.ok) {
+                        alert(data.error || 'ID ou senha incorretos.');
+                        return;
                     }
+
+                    state.currentUser = data.user;
+                    sessionStorage.setItem('estoque_current_user', JSON.stringify(data.user));
 
                     checkUserSession();
                     loadDataFromServer();
@@ -451,7 +381,6 @@
                 if (confirm('Deseja realmente sair da sua conta?')) {
                     state.currentUser = null;
                     sessionStorage.removeItem('estoque_current_user');
-                    switchAuthTab('login');
                     checkUserSession();
                 }
             });
@@ -583,7 +512,7 @@
 
         function addMovementRecord(productId, productName, type, quantity, reason) {
             const newMovement = {
-                id: 'mov_' + Date.now() + '_' + Math.random().toString(36.substring(2, 5)),
+                id: 'mov_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
                 product_id: productId,
                 product_name: productName,
                 type: type,
