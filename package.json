@@ -1,13 +1,16 @@
 {
   "name": "controle-estoque",
   "version": "1.0.0",
-  "description": "Sistema de estoque colaborativo",
+  "description": "Controle de Estoque Colaborativo",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "express": "^4.19.2",
     "pg": "^8.11.3"
+  },
+  "engines": {
+    "node": ">=18.x"
   }
 }
