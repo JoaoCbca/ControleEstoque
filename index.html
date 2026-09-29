@@ -580,124 +580,121 @@
         }
 
         function renderProductsTable() {
-            const isAdmin = state.currentUser && state.currentUser.role === 'admin';
-
-            // Controla visibilidade do botão Novo Produto
-            if (isAdmin) {
-                newProductBtn.classList.remove('hidden');
-            } else {
-                newProductBtn.classList.add('hidden');
-            }
-
-            const search = searchInput.value.toLowerCase();
+            const searchTerm = searchInput.value.toLowerCase();
             const selectedCategory = categoryFilter.value;
 
             const filtered = state.products.filter(p => {
-                const matchSearch = (p.name && p.name.toLowerCase().includes(search)) || (p.sku && p.sku.toLowerCase().includes(search));
-                const matchCat = !selectedCategory || p.category === selectedCategory;
-                return matchSearch && matchCat;
+                const matchesSearch = (p.name && p.name.toLowerCase().includes(searchTerm)) || 
+                                      (p.sku && p.sku.toLowerCase().includes(searchTerm));
+                const matchesCategory = !selectedCategory || p.category === selectedCategory;
+                return matchesSearch && matchesCategory;
             });
 
+            productsTableBody.innerHTML = '';
+
             if (filtered.length === 0) {
-                productsTableBody.innerHTML = `<tr><td colspan="7" class="px-6 py-8 text-center text-gray-500 text-sm">Nenhum produto encontrado.</td></tr>`;
+                productsTableBody.innerHTML = `<tr><td colspan="7" class="px-6 py-4 text-center text-sm text-gray-500">Nenhum produto encontrado.</td></tr>`;
                 return;
             }
 
-            productsTableBody.innerHTML = filtered.map(p => {
+            filtered.forEach(p => {
                 const isLowStock = (p.quantity || 0) <= (p.min_stock || 5);
                 const totalVal = (p.quantity || 0) * (p.price || 0);
 
-                return `
-                    <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-semibold text-gray-900">${escapeHtml(p.name)}</div>
-                            <div class="text-xs text-gray-500 font-mono">SKU: ${escapeHtml(p.sku || 'N/A')}</div>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">${escapeHtml(p.category || 'Geral')}</span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
-                            R$ ${(p.price || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="px-3 py-1 inline-flex text-xs leading-5 font-bold rounded-full ${isLowStock ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
-                                ${p.quantity || 0} un. ${isLowStock ? '<i class="fa-solid fa-triangle-exclamation ml-1.5 mt-0.5" title="Estoque Baixo"></i>' : ''}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-semibold font-mono">
-                            R$ ${totalVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm space-x-1">
-                            <button onclick="openMovementModal('${p.id}', 'ENTRADA')" class="bg-green-50 hover:bg-green-100 text-green-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Entrada"><i class="fa-solid fa-plus"></i> Entr.</button>
-                            <button onclick="openMovementModal('${p.id}', 'SAIDA')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Baixa"><i class="fa-solid fa-minus"></i> Baixa</button>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                            ${isAdmin ? `
-                                <button onclick="editProduct('${p.id}')" class="text-blue-600 hover:text-blue-900" title="Editar Produto"><i class="fa-solid fa-pen-to-square"></i></button>
-                                <button onclick="deleteProduct('${p.id}')" class="text-red-600 hover:text-red-900" title="Excluir Produto"><i class="fa-solid fa-trash"></i></button>
-                            ` : `<span class="text-xs text-gray-400 italic">Somente leitura</span>`}
-                        </td>
-                    </tr>
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="text-sm font-medium text-gray-900">${escapeHtml(p.name)}</div>
+                        <div class="text-xs text-gray-500 font-mono">SKU: ${escapeHtml(p.sku || '-')}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${escapeHtml(p.category || '-')}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(p.price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <span class="px-2.5 py-1 rounded-full text-xs font-semibold ${isLowStock ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
+                            ${p.quantity || 0} un. ${isLowStock ? '<i class="fa-solid fa-triangle-exclamation ml-1"></i>' : ''}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">${totalVal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm space-x-1">
+                        <button onclick="openMovementModal('${p.id}', 'ENTRADA')" class="bg-green-50 hover:bg-green-100 text-green-700 px-2.5 py-1 rounded text-xs font-medium transition-colors" title="Registrar Entrada">
+                            <i class="fa-solid fa-plus mr-1"></i>Entrada
+                        </button>
+                        <button onclick="openMovementModal('${p.id}', 'SAIDA')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1 rounded text-xs font-medium transition-colors" title="Registrar Baixa">
+                            <i class="fa-solid fa-minus mr-1"></i>Baixa
+                        </button>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                        <button onclick="editProduct('${p.id}')" class="text-blue-600 hover:text-blue-900" title="Editar Produto"><i class="fa-solid fa-pen-to-square"></i></button>
+                        <button onclick="deleteProduct('${p.id}')" class="text-red-600 hover:text-red-900" title="Excluir Produto"><i class="fa-solid fa-trash"></i></button>
+                    </td>
                 `;
-            }).join('');
+                productsTableBody.appendChild(tr);
+            });
         }
 
         function renderMovementsTable() {
+            movementsTableBody.innerHTML = '';
+
             if (state.movements.length === 0) {
-                movementsTableBody.innerHTML = `<tr><td colspan="5" class="px-6 py-6 text-center text-gray-500 text-sm">Nenhuma movimentação registrada.</td></tr>`;
+                movementsTableBody.innerHTML = `<tr><td colspan="5" class="px-6 py-4 text-center text-sm text-gray-500">Nenhuma movimentação registrada.</td></tr>`;
                 return;
             }
 
-            movementsTableBody.innerHTML = state.movements.slice(0, 50).map(m => {
-                const dateFormatted = m.date ? new Date(m.date).toLocaleString('pt-BR') : '-';
+            state.movements.slice(0, 50).forEach(m => {
+                const dateObj = m.date ? new Date(m.date) : new Date();
+                const formattedDate = dateObj.toLocaleString('pt-BR');
                 const isEntrada = m.type === 'ENTRADA';
 
-                return `
-                    <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500 font-mono">${dateFormatted}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">${escapeHtml(m.product_name)}</td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="px-2.5 py-1 text-xs font-bold rounded-lg ${isEntrada ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
-                                ${isEntrada ? '+ ' : '- '} ${m.quantity} un (${m.type})
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">${escapeHtml(m.reason)}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><i class="fa-solid fa-user-circle text-gray-400 mr-1"></i> ${escapeHtml(m.user_name)}</td>
-                    </tr>
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">${formattedDate}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHtml(m.product_name)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold ${isEntrada ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                            ${isEntrada ? '+' : '-'}${m.quantity} (${m.type})
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-600 max-w-xs truncate" title="${escapeHtml(m.reason)}">${escapeHtml(m.reason)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">${escapeHtml(m.user_name)}</td>
                 `;
-            }).join('');
+                movementsTableBody.appendChild(tr);
+            });
         }
 
         window.openMovementModal = function(productId, type) {
-            movementProductId.value = productId;
+            const product = state.products.find(p => p.id === productId);
+            if (!product) return;
+
+            movementProductId.value = product.id;
             movementType.value = type;
-            movementQuantity.value = '';
+            movementQuantity.value = '1';
             movementReason.value = '';
-            movementTitle.textContent = type === 'ENTRADA' ? 'Registrar Entrada de Estoque' : 'Registrar Baixa de Estoque';
+
+            movementTitle.textContent = type === 'ENTRADA' ? `Registrar Entrada: ${product.name}` : `Registrar Baixa: ${product.name}`;
             movementModal.classList.remove('hidden');
             movementModal.classList.add('flex');
-        }
+        };
 
         window.editProduct = function(productId) {
             if (!state.currentUser || state.currentUser.role !== 'admin') {
                 alert('Apenas administradores podem editar produtos.');
                 return;
             }
-            const p = state.products.find(item => item.id === productId);
-            if (!p) return;
+            const product = state.products.find(p => p.id === productId);
+            if (!product) return;
 
             modalTitle.textContent = 'Editar Produto';
-            productIdInput.value = p.id;
-            document.getElementById('product-name').value = p.name;
-            document.getElementById('product-sku').value = p.sku || '';
-            document.getElementById('product-category').value = p.category || '';
-            document.getElementById('product-price').value = p.price;
-            document.getElementById('product-quantity').value = p.quantity;
-            document.getElementById('product-min-stock').value = p.min_stock || 5;
+            productIdInput.value = product.id;
+            document.getElementById('product-name').value = product.name || '';
+            document.getElementById('product-sku').value = product.sku || '';
+            document.getElementById('product-category').value = product.category || '';
+            document.getElementById('product-price').value = product.price || 0;
+            document.getElementById('product-quantity').value = product.quantity || 0;
+            document.getElementById('product-min-stock').value = product.min_stock || 5;
 
             productModal.classList.remove('hidden');
             productModal.classList.add('flex');
-        }
+        };
 
         window.deleteProduct = function(productId) {
             if (!state.currentUser || state.currentUser.role !== 'admin') {
@@ -709,7 +706,7 @@
                 saveState();
                 renderAll();
             }
-        }
+        };
     </script>
 </body>
 </html>
