@@ -4,7 +4,9 @@ const path = require('path');
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Configurado para buscar os arquivos estáticos diretamente na raiz do projeto (onde está o index.html)
+app.use(express.static(__dirname));
 
 // Configuração do Banco de Dados
 const pool = new Pool({
