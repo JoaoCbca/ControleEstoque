@@ -4,9 +4,7 @@ const path = require('path');
 
 const app = express();
 app.use(express.json());
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Configuração do Banco de Dados
 const pool = new Pool({
@@ -47,10 +45,10 @@ async function initDB() {
 }
 initDB();
 
-// Rotas para buscar dados
+// Rota para buscar dados
 app.get('/api/data', async (req, res) => {
   try {
-    const users = await pool.query('SELECT * FROM users');
+    const users = await pool.query('SELECT id, name, user_id FROM users'); // Nunca retorna senhas na listagem geral
     const products = await pool.query('SELECT * FROM products');
     const movements = await pool.query('SELECT * FROM movements ORDER BY date DESC');
     res.json({
@@ -63,28 +61,66 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-// Rota para salvar/sincronizar alterações do front-end
+// Rota de Autenticação Direta (Login/Registro seguro no backend)
+app.post('/api/auth', async (req, res) => {
+  const { action, userId, password, name } = req.body;
+  
+  if (!userId || !/^\d{8}$/.test(userId)) {
+    return res.status(400).json({ error: 'ID de acesso inválido. Deve conter exatamente 8 dígitos numéricos.' });
+  }
+
+  try {
+    if (action === 'register') {
+      // Verifica se o ID já existe
+      const check = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
+      if (check.rows.length > 0) {
+        return res.status(400).json({ error: 'Este ID já está cadastrado no sistema.' });
+      }
+      
+      const newId = 'usr_' + Date.now();
+      await pool.query(
+        'INSERT INTO users (id, name, user_id, password) VALUES ($1, $2, $3, $4)',
+        [newId, name || 'Usuário', userId, password]
+      );
+      
+      return res.json({ success: true, user: { id: newId, name: name || 'Usuário', user_id: userId } });
+      
+    } else {
+      // Login
+      const result = await pool.query('SELECT * FROM users WHERE user_id = $1 AND password = $2', [userId, password]);
+      if (result.rows.length === 0) {
+        return res.status(401).json({ error: 'ID ou senha incorretos.' });
+      }
+      
+      const user = result.rows[0];
+      return res.json({ success: true, user: { id: user.id, name: user.name, user_id: user.user_id } });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rota para salvar/sincronizar alterações — AGORA PROTEGIDA POR VALIDAÇÃO DE USUÁRIO
 app.post('/api/sync', async (req, res) => {
-  const { users, products, movements } = req.body;
+  const { user, products, movements } = req.body;
+
+  // Validação de segurança: Ninguém mexe no estoque sem passar um usuário válido autenticado
+  if (!user || !user.user_id) {
+    return res.status(403).json({ error: 'Acesso negado. É necessário estar autenticado para sincronizar dados.' });
+  }
+
   const client = await pool.connect();
   
   try {
-    await client.query('BEGIN');
-
-    // 1. Sincronizar Usuários (Insere ou atualiza se já existir)
-    if (users && Array.isArray(users)) {
-      for (const user of users) {
-        await client.query(
-          `INSERT INTO users (id, name, user_id, password) 
-           VALUES ($1, $2, $3, $4) 
-           ON CONFLICT (id) DO UPDATE 
-           SET name = EXCLUDED.name, user_id = EXCLUDED.user_id, password = EXCLUDED.password`,
-          [user.id, user.name, user.user_id, user.password]
-        );
-      }
+    // Valida no banco se o usuário realmente existe antes de aceitar a alteração
+    const userCheck = await client.query('SELECT * FROM users WHERE user_id = $1', [user.user_id]);
+    if (userCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'Usuário não autorizado.' });
     }
 
-    // 2. Sincronizar Produtos (Insere ou atualiza se já existir)
+    await client.query('BEGIN');
+
+    // 1. Sincronizar Produtos
     if (products && Array.isArray(products)) {
       for (const prod of products) {
         await client.query(
@@ -99,7 +135,7 @@ app.post('/api/sync', async (req, res) => {
       }
     }
 
-    // 3. Sincronizar Movimentações (Insere apenas se não existir para evitar duplicidade)
+    // 2. Sincronizar Movimentações
     if (movements && Array.isArray(movements)) {
       for (const mov of movements) {
         await client.query(
@@ -112,7 +148,7 @@ app.post('/api/sync', async (req, res) => {
     }
 
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Dados sincronizados com sucesso!' });
+    res.json({ success: true, message: 'Dados sincronizados com segurança!' });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: err.message });
