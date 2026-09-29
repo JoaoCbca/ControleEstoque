@@ -19,7 +19,8 @@ async function initDB() {
       id VARCHAR(50) PRIMARY KEY,
       name VARCHAR(100),
       user_id VARCHAR(8) UNIQUE,
-      password VARCHAR(100)
+      password VARCHAR(100),
+      role VARCHAR(20) DEFAULT 'user'
     );
     CREATE TABLE IF NOT EXISTS products (
       id VARCHAR(50) PRIMARY KEY,
@@ -48,7 +49,7 @@ initDB();
 // Rota para buscar dados
 app.get('/api/data', async (req, res) => {
   try {
-    const users = await pool.query('SELECT id, name, user_id FROM users');
+    const users = await pool.query('SELECT id, name, user_id, role FROM users');
     const products = await pool.query('SELECT * FROM products');
     const movements = await pool.query('SELECT * FROM movements ORDER BY date DESC');
     res.json({
@@ -61,7 +62,7 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-// Rota de Autenticação (Apenas Login para usuários pré-cadastrados no Banco)
+// Rota de Autenticação (Login com retorno de perfil/role)
 app.post('/api/auth', async (req, res) => {
   const { userId, password } = req.body;
   
@@ -76,13 +77,21 @@ app.post('/api/auth', async (req, res) => {
     }
     
     const user = result.rows[0];
-    return res.json({ success: true, user: { id: user.id, name: user.name, user_id: user.user_id } });
+    return res.json({ 
+      success: true, 
+      user: { 
+        id: user.id, 
+        name: user.name, 
+        user_id: user.user_id, 
+        role: user.role || 'user' 
+      } 
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Rota para salvar/sincronizar alterações — Protegida por validação de usuário
+// Rota para salvar/sincronizar alterações — Valida permissões de admin para produtos
 app.post('/api/sync', async (req, res) => {
   const { user, products, movements } = req.body;
 
@@ -98,10 +107,17 @@ app.post('/api/sync', async (req, res) => {
       return res.status(403).json({ error: 'Usuário não autorizado.' });
     }
 
+    const dbUser = userCheck.rows[0];
+    const isUserAdmin = dbUser.role === 'admin';
+
     await client.query('BEGIN');
 
-    // 1. Sincronizar Produtos
+    // 1. Sincronizar Produtos (Apenas Admin pode criar/editar estrutura de produtos diretamente)
     if (products && Array.isArray(products)) {
+      if (!isUserAdmin) {
+        return res.status(403).json({ error: 'Apenas administradores podem cadastrar ou alterar produtos.' });
+      }
+
       for (const prod of products) {
         await client.query(
           `INSERT INTO products (id, name, sku, category, price, quantity, min_stock, updated_at) 
@@ -115,7 +131,7 @@ app.post('/api/sync', async (req, res) => {
       }
     }
 
-    // 2. Sincronizar Movimentações
+    // 2. Sincronizar Movimentações (Qualquer usuário autorizado pode registrar entradas e baixas)
     if (movements && Array.isArray(movements)) {
       for (const mov of movements) {
         await client.query(
