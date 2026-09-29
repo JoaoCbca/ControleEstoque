@@ -1,197 +1,218 @@
 const express = require('express');
-const { Pool } = require('pg');
+const sqlite3 = require('sqlite3').verbose();
+const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto'); // Módulo nativo do Node.js para criptografia
 
 const app = express();
-app.use(express.json());
-
-// Configurado para buscar os arquivos estáticos diretamente na raiz do projeto (onde está o index.html)
-app.use(express.static(__dirname));
-
-// Configuração do Banco de Dados
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
-
-// Criar tabelas automaticamente se não existirem
-async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id VARCHAR(50) PRIMARY KEY,
-      name VARCHAR(100),
-      user_id VARCHAR(8) UNIQUE,
-      password VARCHAR(100),
-      role VARCHAR(20) DEFAULT 'user'
-    );
-    CREATE TABLE IF NOT EXISTS products (
-      id VARCHAR(50) PRIMARY KEY,
-      name VARCHAR(150),
-      sku VARCHAR(50),
-      category VARCHAR(100),
-      price NUMERIC(10,2),
-      quantity INT,
-      min_stock INT,
-      updated_at TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS movements (
-      id VARCHAR(50) PRIMARY KEY,
-      product_id VARCHAR(50),
-      product_name VARCHAR(150),
-      type VARCHAR(20),
-      quantity INT,
-      reason TEXT,
-      user_name VARCHAR(100),
-      date TIMESTAMP
-    );
-  `);
-}
-initDB();
-
-// Rota para buscar dados
-app.get('/api/data', async (req, res) => {
-  try {
-    const users = await pool.query('SELECT id, name, user_id, role FROM users');
-    const products = await pool.query('SELECT * FROM products');
-    const movements = await pool.query('SELECT * FROM movements ORDER BY date DESC');
-    res.json({
-      users: users.rows,
-      products: products.rows,
-      movements: movements.rows
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Rota de Autenticação (Login com retorno de perfil/role)
-app.post('/api/auth', async (req, res) => {
-  const { userId, password } = req.body;
-  
-  if (!userId || !/^\d{8}$/.test(userId)) {
-    return res.status(400).json({ error: 'ID de acesso inválido. Deve conter exatamente 8 dígitos numéricos.' });
-  }
-
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'ID ou senha incorretos, ou usuário não autorizado.' });
-    }
-    
-    const user = result.rows[0];
-
-    // Verifica se o usuário ainda não cadastrou a senha (primeiro acesso)
-    if (!user.password) {
-      return res.status(403).json({ error: 'Primeiro acesso detectado. Por favor, cadastre sua senha antes de entrar.', needsPasswordSetup: true });
-    }
-
-    if (user.password !== password) {
-      return res.status(401).json({ error: 'ID ou senha incorretos, ou usuário não autorizado.' });
-    }
-
-    return res.json({ 
-      success: true, 
-      user: { 
-        id: user.id, 
-        name: user.name, 
-        user_id: user.user_id, 
-        role: user.role || 'user' 
-      } 
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Rota para cadastrar/definir a senha no primeiro acesso
-app.post('/api/set-password', async (req, res) => {
-  const { userId, newPassword } = req.body;
-
-  if (!userId || !/^\d{8}$/.test(userId)) {
-    return res.status(400).json({ error: 'ID de acesso inválido. Deve conter 8 dígitos.' });
-  }
-
-  if (!newPassword || newPassword.length < 4) {
-    return res.status(400).json({ error: 'A senha deve ter pelo menos 4 caracteres.' });
-  }
-
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Usuário não encontrado. Solicite o cadastro ao administrador.' });
-    }
-
-    // Atualiza a senha do usuário
-    await pool.query('UPDATE users SET password = $1 WHERE user_id = $2', [newPassword, userId]);
-
-    res.json({ success: true, message: 'Senha cadastrada com sucesso! Agora você já pode fazer login.' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Rota para salvar/sincronizar alterações — Valida permissões de admin para produtos
-app.post('/api/sync', async (req, res) => {
-  const { user, products, movements } = req.body;
-
-  if (!user || !user.user_id) {
-    return res.status(403).json({ error: 'Acesso negado. É necessário estar autenticado.' });
-  }
-
-  const client = await pool.connect();
-  
-  try {
-    const userCheck = await client.query('SELECT * FROM users WHERE user_id = $1', [user.user_id]);
-    if (userCheck.rows.length === 0) {
-      return res.status(403).json({ error: 'Usuário não autorizado.' });
-    }
-
-    const dbUser = userCheck.rows[0];
-    const isUserAdmin = dbUser.role === 'admin';
-
-    await client.query('BEGIN');
-
-    // 1. Sincronizar Produtos (Apenas Admin pode criar/editar estrutura de produtos diretamente)
-    if (products && Array.isArray(products)) {
-      if (!isUserAdmin) {
-        return res.status(403).json({ error: 'Apenas administradores podem cadastrar ou alterar produtos.' });
-      }
-
-      for (const prod of products) {
-        await client.query(
-          `INSERT INTO products (id, name, sku, category, price, quantity, min_stock, updated_at) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
-           ON CONFLICT (id) DO UPDATE 
-           SET name = EXCLUDED.name, sku = EXCLUDED.sku, category = EXCLUDED.category, 
-               price = EXCLUDED.price, quantity = EXCLUDED.quantity, 
-               min_stock = EXCLUDED.min_stock, updated_at = EXCLUDED.updated_at`,
-          [prod.id, prod.name, prod.sku, prod.category, prod.price, prod.quantity, prod.min_stock, prod.updated_at]
-        );
-      }
-    }
-
-    // 2. Sincronizar Movimentações (Qualquer usuário autorizado pode registrar entradas e baixas)
-    if (movements && Array.isArray(movements)) {
-      for (const mov of movements) {
-        await client.query(
-          `INSERT INTO movements (id, product_id, product_name, type, quantity, reason, user_name, date) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
-           ON CONFLICT (id) DO NOTHING`,
-          [mov.id, mov.product_id, mov.product_name, mov.type, mov.quantity, mov.reason, mov.user_name, mov.date]
-        );
-      }
-    }
-
-    await client.query('COMMIT');
-    res.json({ success: true, message: 'Dados sincronizados com segurança!' });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
-  }
-});
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+
+app.use(express.json());
+app.use(cors());
+
+// Configuração do Banco de Dados SQLite local
+const dbFile = path.join(__dirname, 'estoque.db');
+const db = new sqlite3.Database(dbFile, (err) => {
+    if (err) {
+        console.error('Erro ao abrir o banco de dados:', err.message);
+    } else {
+        console.log('Conectado ao banco de dados SQLite.');
+        initDatabase();
+    }
+});
+
+// Função para criptografar a senha com Salt (Segurança Avançada)
+function hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    return `${salt}:${hash}`;
+}
+
+// Função para verificar se a senha digitada confere com o hash salvo
+function verifyPassword(password, storedHash) {
+    const [salt, key] = storedHash.split(':');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    return key === hash;
+}
+
+// Criação das tabelas e usuário Admin padrão
+function initDatabase() {
+    db.serialize(() => {
+        db.run(`CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT UNIQUE,
+            name TEXT,
+            password TEXT,
+            role TEXT
+        )`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS products (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            sku TEXT,
+            category TEXT,
+            price REAL,
+            quantity INTEGER,
+            min_stock INTEGER,
+            updated_at TEXT
+        )`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS movements (
+            id TEXT PRIMARY KEY,
+            product_id TEXT,
+            product_name TEXT,
+            type TEXT,
+            quantity INTEGER,
+            reason TEXT,
+            user_name TEXT,
+            date TEXT
+        )`);
+
+        // Cria o Administrador padrão caso não exista (ID: 91004500)
+        db.get(`SELECT * FROM users WHERE user_id = ?`, ['91004500'], (err, row) => {
+            if (!row) {
+                const securePassword = hashPassword('Corinthians1910*');
+                db.run(
+                    `INSERT INTO users (user_id, name, password, role) VALUES (?, ?, ?, ?)`,
+                    ['91004500', 'Administrador', securePassword, 'admin'],
+                    (err) => {
+                        if (!err) console.log('Usuário Administrador criado com senha criptografada (ID: 91004500)');
+                    }
+                );
+            }
+        });
+    });
+}
+
+// 1. Rota de Autenticação (Login com verificação de senha criptografada)
+app.post('/api/auth', (req, res) => {
+    const { userId, password } = req.body;
+
+    if (!userId || !password) {
+        return res.status(400).json({ error: 'Informe o ID e a senha.' });
+    }
+
+    db.get(`SELECT * FROM users WHERE user_id = ?`, [userId], (err, user) => {
+        if (err) {
+            return res.status(500).json({ error: 'Erro interno no servidor.' });
+        }
+
+        if (!user || !verifyPassword(password, user.password)) {
+            return res.status(401).json({ error: 'ID de acesso ou senha incorretos.' });
+        }
+
+        res.json({
+            user: {
+                id: user.user_id,
+                name: user.name,
+                role: user.role
+            }
+        });
+    });
+});
+
+// 2. Rota para Cadastrar Novos Usuários (Com ID de 8 dígitos e criptografia)
+app.post('/api/users', (req, res) => {
+    const { userId, name, password, role } = req.body;
+
+    // Validações básicas
+    if (!userId || !/^\d{8}$/.test(userId)) {
+        return res.status(400).json({ error: 'O ID de acesso deve conter exatamente 8 números.' });
+    }
+    if (!name || !password || !role) {
+        return res.status(400).json({ error: 'Preencha todos os campos do usuário.' });
+    }
+
+    const securePassword = hashPassword(password);
+
+    db.run(
+        `INSERT INTO users (user_id, name, password, role) VALUES (?, ?, ?, ?)`,
+        [userId, name, securePassword, role],
+        function(err) {
+            if (err) {
+                return res.status(400).json({ error: 'Este ID de 8 dígitos já está cadastrado.' });
+            }
+            res.json({ success: true, message: 'Usuário cadastrado com sucesso!' });
+        }
+    );
+});
+
+// 3. Nova Rota para Alteração de Senha de forma segura
+app.put('/api/users/password', (req, res) => {
+    const { userId, oldPassword, newPassword } = req.body;
+
+    if (!userId || !oldPassword || !newPassword) {
+        return res.status(400).json({ error: 'Informe o ID, a senha antiga e a nova senha.' });
+    }
+
+    db.get(`SELECT * FROM users WHERE user_id = ?`, [userId], (err, user) => {
+        if (err || !user) {
+            return res.status(404).json({ error: 'Usuário não encontrado.' });
+        }
+
+        // Confere se a senha antiga está correta
+        if (!verifyPassword(oldPassword, user.password)) {
+            return res.status(401).json({ error: 'A senha atual está incorreta.' });
+        }
+
+        // Gera o hash seguro para a nova senha
+        const secureNewPassword = hashPassword(newPassword);
+
+        db.run(
+            `UPDATE users SET password = ? WHERE user_id = ?`,
+            [secureNewPassword, userId],
+            (err) => {
+                if (err) {
+                    return res.status(500).json({ error: 'Erro ao atualizar a senha.' });
+                }
+                res.json({ success: true, message: 'Senha alterada com sucesso!' });
+            }
+        );
+    });
+});
+
+// Rota para carregar dados do sistema
+app.get('/api/data', (req, res) => {
+    let responseData = { products: [], movements: [], users: [] };
+
+    db.all(`SELECT * FROM products`, [], (err, products) => {
+        if (!err) responseData.products = products;
+
+        db.all(`SELECT * FROM movements ORDER BY date DESC`, [], (err, movements) => {
+            if (!err) responseData.movements = movements;
+
+            db.all(`SELECT user_id as id, name, role FROM users`, [], (err, users) => {
+                if (!err) responseData.users = users;
+
+                res.json(responseData);
+            });
+        });
+    });
+});
+
+// Rota de Sincronização de Estoque
+app.post('/api/sync', (req, res) => {
+    const { products, movements } = req.body;
+
+    if (products && Array.isArray(products)) {
+        const stmt = db.prepare(`INSERT OR REPLACE INTO products (id, name, sku, category, price, quantity, min_stock, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        products.forEach(p => {
+            stmt.run(p.id, p.name, p.sku, p.category, p.price, p.quantity, p.min_stock, p.updated_at);
+        });
+        stmt.finalize();
+    }
+
+    if (movements && Array.isArray(movements)) {
+        const stmtMov = db.prepare(`INSERT OR IGNORE INTO movements (id, product_id, product_name, type, quantity, reason, user_name, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        movements.forEach(m => {
+            stmtMov.run(m.id, m.product_id, m.product_name, m.type, m.quantity, m.reason, m.user_name, m.date);
+        });
+        stmtMov.finalize();
+    }
+
+    res.json({ success: true });
+});
+
+app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+});
