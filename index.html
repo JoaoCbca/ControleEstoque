@@ -297,7 +297,7 @@
 
         async function saveState() {
             try {
-                await fetch('/api/sync', {
+                const response = await fetch('/api/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -306,6 +306,10 @@
                         movements: state.movements
                     })
                 });
+                const data = await response.json();
+                if (!response.ok) {
+                    alert(data.error || 'Erro ao sincronizar.');
+                }
             } catch (error) {
                 console.error("Erro ao sincronizar com o servidor:", error);
             }
@@ -336,7 +340,8 @@
                 authModal.classList.remove('hidden');
                 authModal.classList.add('flex');
             } else {
-                currentUserSpan.textContent = `${state.currentUser.name} (ID: ${state.currentUser.user_id})`;
+                const roleLabel = state.currentUser.role === 'admin' ? 'Administrador' : 'Usuário Comum';
+                currentUserSpan.textContent = `${state.currentUser.name} (${roleLabel})`;
                 authModal.classList.add('hidden');
                 authModal.classList.remove('flex');
             }
@@ -386,6 +391,10 @@
             });
 
             newProductBtn.addEventListener('click', () => {
+                if (!state.currentUser || state.currentUser.role !== 'admin') {
+                    alert('Apenas administradores podem cadastrar novos produtos.');
+                    return;
+                }
                 modalTitle.textContent = 'Novo Produto';
                 productIdInput.value = '';
                 productForm.reset();
@@ -400,6 +409,11 @@
 
             productForm.addEventListener('submit', (e) => {
                 e.preventDefault();
+                if (!state.currentUser || state.currentUser.role !== 'admin') {
+                    alert('Ação negada. Apenas administradores podem gerenciar produtos.');
+                    return;
+                }
+
                 const id = productIdInput.value;
                 const name = document.getElementById('product-name').value.trim();
                 const sku = document.getElementById('product-sku').value.trim();
@@ -407,7 +421,7 @@
                 const price = parseFloat(document.getElementById('product-price').value);
                 const quantity = parseInt(document.getElementById('product-quantity').value);
                 const minStock = parseInt(document.getElementById('product-min-stock').value);
-                const userName = state.currentUser ? state.currentUser.name : 'Anônimo';
+                const userName = state.currentUser.name;
 
                 if (id) {
                     const index = state.products.findIndex(p => p.id === id);
@@ -420,7 +434,7 @@
                         };
                         if (oldQty !== quantity) {
                             const diff = quantity - oldQty;
-                            addMovementRecord(id, name, diff > 0 ? 'ENTRADA' : 'SAIDA', Math.abs(diff), `Ajuste manual (${userName})`);
+                            addMovementRecord(id, name, diff > 0 ? 'ENTRADA' : 'SAIDA', Math.abs(diff), `Ajuste manual por Admin (${userName})`);
                         }
                     }
                 } else {
@@ -431,7 +445,7 @@
                     };
                     state.products.push(newProduct);
                     if (quantity > 0) {
-                        addMovementRecord(newProduct.id, name, 'ENTRADA', quantity, `Estoque inicial cadastrado por ${userName}`);
+                        addMovementRecord(newProduct.id, name, 'ENTRADA', quantity, `Estoque inicial cadastrado por Admin (${userName})`);
                     }
                 }
 
@@ -488,7 +502,13 @@
                 downloadAnchor.remove();
             });
 
-            importDataBtn.addEventListener('click', () => importFileInput.click());
+            importDataBtn.addEventListener('click', () => {
+                if (!state.currentUser || state.currentUser.role !== 'admin') {
+                    alert('Apenas administradores podem importar dados completos.');
+                    return;
+                }
+                importFileInput.click();
+            });
 
             importFileInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
@@ -560,6 +580,15 @@
         }
 
         function renderProductsTable() {
+            const isAdmin = state.currentUser && state.currentUser.role === 'admin';
+
+            // Controla visibilidade do botão Novo Produto
+            if (isAdmin) {
+                newProductBtn.classList.remove('hidden');
+            } else {
+                newProductBtn.classList.add('hidden');
+            }
+
             const search = searchInput.value.toLowerCase();
             const selectedCategory = categoryFilter.value;
 
@@ -603,8 +632,10 @@
                             <button onclick="openMovementModal('${p.id}', 'SAIDA')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors" title="Registrar Baixa"><i class="fa-solid fa-minus"></i> Baixa</button>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                            <button onclick="editProduct('${p.id}')" class="text-blue-600 hover:text-blue-900" title="Editar Produto"><i class="fa-solid fa-pen-to-square"></i></button>
-                            <button onclick="deleteProduct('${p.id}')" class="text-red-600 hover:text-red-900" title="Excluir Produto"><i class="fa-solid fa-trash"></i></button>
+                            ${isAdmin ? `
+                                <button onclick="editProduct('${p.id}')" class="text-blue-600 hover:text-blue-900" title="Editar Produto"><i class="fa-solid fa-pen-to-square"></i></button>
+                                <button onclick="deleteProduct('${p.id}')" class="text-red-600 hover:text-red-900" title="Excluir Produto"><i class="fa-solid fa-trash"></i></button>
+                            ` : `<span class="text-xs text-gray-400 italic">Somente leitura</span>`}
                         </td>
                     </tr>
                 `;
@@ -648,6 +679,10 @@
         }
 
         window.editProduct = function(productId) {
+            if (!state.currentUser || state.currentUser.role !== 'admin') {
+                alert('Apenas administradores podem editar produtos.');
+                return;
+            }
             const p = state.products.find(item => item.id === productId);
             if (!p) return;
 
@@ -665,6 +700,10 @@
         }
 
         window.deleteProduct = function(productId) {
+            if (!state.currentUser || state.currentUser.role !== 'admin') {
+                alert('Apenas administradores podem excluir produtos.');
+                return;
+            }
             if (confirm('Tem certeza que deseja excluir este produto do estoque?')) {
                 state.products = state.products.filter(p => p.id !== productId);
                 saveState();
