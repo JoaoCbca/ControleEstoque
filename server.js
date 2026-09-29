@@ -73,12 +73,22 @@ app.post('/api/auth', async (req, res) => {
   }
 
   try {
-    const result = await pool.query('SELECT * FROM users WHERE user_id = $1 AND password = $2', [userId, password]);
+    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'ID ou senha incorretos, ou usuário não autorizado.' });
     }
     
     const user = result.rows[0];
+
+    // Verifica se o usuário ainda não cadastrou a senha (primeiro acesso)
+    if (!user.password) {
+      return res.status(403).json({ error: 'Primeiro acesso detectado. Por favor, cadastre sua senha antes de entrar.', needsPasswordSetup: true });
+    }
+
+    if (user.password !== password) {
+      return res.status(401).json({ error: 'ID ou senha incorretos, ou usuário não autorizado.' });
+    }
+
     return res.json({ 
       success: true, 
       user: { 
@@ -88,6 +98,34 @@ app.post('/api/auth', async (req, res) => {
         role: user.role || 'user' 
       } 
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rota para cadastrar/definir a senha no primeiro acesso
+app.post('/api/set-password', async (req, res) => {
+  const { userId, newPassword } = req.body;
+
+  if (!userId || !/^\d{8}$/.test(userId)) {
+    return res.status(400).json({ error: 'ID de acesso inválido. Deve conter 8 dígitos.' });
+  }
+
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 4 caracteres.' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuário não encontrado. Solicite o cadastro ao administrador.' });
+    }
+
+    // Atualiza a senha do usuário
+    await pool.query('UPDATE users SET password = $1 WHERE user_id = $2', [newPassword, userId]);
+
+    res.json({ success: true, message: 'Senha cadastrada com sucesso! Agora você já pode fazer login.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
